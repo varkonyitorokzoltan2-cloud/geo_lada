@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="hu" class="h-full bg-slate-900 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Geo láda keresése</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <style>
+    /* Custom Map Tile Styles for Blank/Vak Térkép mode */
+    .blank-map-layer {
+      filter: brightness(0) invert(0.1) contrast(150%);
+    }
+
+    /* Touch optimization */
+    body {
+      touch-action: manipulation;
+    }
+
+    #map {
+      height: 100%;
+      width: 100%;
+      z-index: 1;
+    }
+
+    /* Pulse effect for user location dot */
+    .user-pulse {
+      width: 16px;
+      height: 16px;
+      background-color: #3b82f6;
+      border: 3px solid #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 0 10px rgba(59, 130, 246, 0.8);
+      animation: pulse 1.8s infinite;
+    }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); }
+      70% { box-shadow: 0 0 0 12px rgba(59, 130, 246, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+    }
+
+    /* Custom scrollbars */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #475569;
+      border-radius: 9999px;
+    }
+  </style>
+</head>
+<body class="h-full flex flex-col font-sans overflow-hidden select-none">
+
+<!-- Top Navigation & Controls Panel -->
+<header class="bg-slate-800 border-b border-slate-700 p-3 z-10 shadow-lg shrink-0">
+  <div class="max-w-4xl mx-auto flex flex-col gap-2">
+    <!-- Header Title & Info -->
+    <div class="flex items-center justify-between">
+      <h1 class="text-xl font-bold text-amber-400 flex items-center gap-2">
+        <i class="fa-solid fa-box-archive text-amber-500"></i> Geo Láda Kereső
+      </h1>
+      <div id="gameTimer" class="text-lg font-mono font-bold bg-slate-900 px-3 py-1 rounded-lg border border-slate-700 text-emerald-400 hidden">
+        00:00:00
+      </div>
+    </div>
+
+    <!-- Search Bar -->
+    <div class="flex gap-2">
+      <div class="relative flex-1">
+        <input
+          type="text"
+          id="searchInput"
+          placeholder="Település keresése (pl. Budapest, Eger)..."
+          class="w-full bg-slate-900 border border-slate-700 text-slate-100 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-amber-500"
+          onkeydown="if(event.key === 'Enter') searchLocation()"
+        >
+        <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-sm"></i>
+      </div>
+      <button
+        onclick="searchLocation()"
+        class="bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-slate-200 px-4 py-2 rounded-lg text-sm font-semibold transition"
+      >
+        Keresés
+      </button>
+    </div>
+
+    <!-- Quick Action Controls -->
+    <div class="flex flex-wrap items-center justify-between gap-2 pt-1">
+      <!-- Toggle map blank mode -->
+      <button
+        id="toggleMapBtn"
+        onclick="toggleMapVisibility()"
+        class="flex-1 sm:flex-initial flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-amber-300 border border-slate-600 px-3 py-2 rounded-lg text-xs font-semibold transition"
+      >
+        <i class="fa-solid fa-eye-slash" id="toggleMapIcon"></i>
+        <span id="toggleMapText">Térkép bekapcsolása</span>
+      </button>
+
+      <!-- Clear caches -->
+      <button
+        onclick="clearCaches()"
+        class="flex items-center justify-center gap-1.5 bg-red-950 hover:bg-red-900 active:bg-red-800 text-red-200 border border-red-800 px-3 py-2 rounded-lg text-xs font-semibold transition"
+        title="Törli az összes letett ládát"
+      >
+        <i class="fa-solid fa-trash"></i>
+        <span>Ládák törlése</span>
+      </button>
+
+      <!-- Stats log modal toggle -->
+      <button
+        onclick="toggleLogModal()"
+        class="flex items-center justify-center gap-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 px-3 py-2 rounded-lg text-xs font-semibold transition"
+      >
+        <i class="fa-solid fa-trophy text-amber-400"></i>
+        <span>Eredmények</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- Main Map Container -->
+<main class="relative flex-1 w-full h-full">
+  <div id="map"></div>
+
+  <!-- Status Banner Overlay -->
+  <div id="statusOverlay" class="absolute top-3 left-1/2 -translate-x-1/2 z-[500] bg-slate-900/90 backdrop-blur border border-slate-700 text-slate-200 px-4 py-2 rounded-full text-xs font-semibold shadow-xl pointer-events-none flex items-center gap-2">
+    <span class="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
+    <span id="statusText">Helyezz el geo ládákat a térképre kattintva!</span>
+  </div>
+
+  <!-- Bottom Controls Panel (Game Start/Stop & Stats) -->
+  <div class="absolute bottom-5 left-1/2 -translate-x-1/2 z-[500] w-11/12 max-w-md bg-slate-800/95 backdrop-blur-md border border-slate-700 p-4 rounded-2xl shadow-2xl flex flex-col gap-3">
+    <div class="flex items-center justify-between text-xs font-semibold text-slate-400 border-b border-slate-700/60 pb-2">
+      <div class="flex items-center gap-1.5">
+        <i class="fa-solid fa-box text-amber-400"></i>
+        <span>Ládák: <strong id="cacheCountText" class="text-slate-100">0</strong> db</span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <i class="fa-solid fa-check-circle text-emerald-400"></i>
+        <span>Megtalálva: <strong id="foundCountText" class="text-emerald-400">0</strong> db</span>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <i class="fa-solid fa-route text-blue-400"></i>
+        <span>Út: <strong id="distanceText" class="text-slate-100">0 m</strong></span>
+      </div>
+    </div>
+
+    <div class="flex gap-2">
+      <!-- Start Game Button -->
+      <button
+        id="startGameBtn"
+        onclick="startGame()"
+        class="flex-1 flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white py-3 px-4 rounded-xl font-bold shadow-lg shadow-emerald-950/50 transition text-base"
+      >
+        <i class="fa-solid fa-play"></i>
+        <span>Start (Játék indítása)</span>
+      </button>
+
+      <!-- Stop Game Button -->
+      <button
+        id="stopGameBtn"
+        onclick="stopGame()"
+        class="hidden flex-1 flex items-center justify-center gap-2 bg-red-600 hover:bg-red-500 active:bg-red-700 text-white py-3 px-4 rounded-xl font-bold shadow-lg shadow-red-950/50 transition text-base"
+      >
+        <i class="fa-solid fa-stop"></i>
+        <span>Keresés leállítása</span>
+      </button>
+    </div>
+  </div>
+</main>
+
+<!-- Log Results Modal -->
+<div id="logModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-[1000] hidden flex items-center justify-center p-4">
+  <div class="bg-slate-800 border border-slate-700 w-full max-w-md rounded-2xl p-5 shadow-2xl flex flex-col gap-4 max-h-[85vh]">
+    <div class="flex items-center justify-between border-b border-slate-700 pb-3">
+      <h3 class="text-lg font-bold text-amber-400 flex items-center gap-2">
+        <i class="fa-solid fa-trophy"></i> Megtalált Láda Előzmények
+      </h3>
+      <button onclick="toggleLogModal()" class="text-slate-400 hover:text-slate-200">
+        <i class="fa-solid fa-xmark text-xl"></i>
+      </button>
+    </div>
+
+    <div id="logList" class="flex flex-col gap-2 overflow-y-auto pr-1 text-sm">
+      <!-- Log entries populated dynamically -->
+      <p class="text-slate-400 text-center py-4">Még nem találtál meg geo ládát.</p>
+    </div>
+
+    <div class="flex justify-between items-center border-t border-slate-700 pt-3">
+      <button
+        onclick="clearLogs()"
+        class="text-xs text-red-400 hover:text-red-300 underline"
+      >
+        Előzmények törlése
+      </button>
+      <button
+        onclick="toggleLogModal()"
+        class="bg-slate-700 hover:bg-slate-600 text-slate-100 font-semibold px-4 py-2 rounded-lg text-sm"
+      >
+        Bezárás
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Found Cache Victory Dialog Modal -->
+<div id="victoryModal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-[1001] hidden flex items-center justify-center p-4">
+  <div class="bg-slate-800 border-2 border-emerald-500 w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center flex flex-col items-center gap-4 animate-bounce-once">
+    <div class="w-16 h-16 bg-emerald-500/20 text-emerald-400 rounded-full flex items-center justify-center text-3xl border border-emerald-500/40">
+      <i class="fa-solid fa-gift"></i>
+    </div>
+    <div>
+      <h2 class="text-2xl font-black text-emerald-400">Gratulálunk!</h2>
+      <p class="text-slate-300 text-sm mt-1">Sikeresen megtaláltál egy Geo ládát!</p>
+    </div>
+
+    <div class="bg-slate-900 border border-slate-700 rounded-xl p-3 w-full text-left flex flex-col gap-2 text-xs">
+      <div class="flex justify-between">
+        <span class="text-slate-400">Láda azonosító:</span>
+        <span id="victoryCacheId" class="font-bold text-amber-400">#1</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-slate-400">Eltelt idő:</span>
+        <span id="victoryTime" class="font-mono font-bold text-emerald-400">00:00:00</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-slate-400">Dátum:</span>
+        <span id="victoryDate" class="text-slate-200">2026.11.17 17:57</span>
+      </div>
+    </div>
+
+    <button
+      onclick="closeVictoryModal()"
+      class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl transition shadow-lg"
+    >
+      Keresés folytatása
+    </button>
+  </div>
+</div>
+
+<script>
+  // --- APP STATE ---
+  let map = null;
+  let tileLayer = null;
+  let isBlankMap = true; // Default "vak térkép" mode
+  let caches = []; // { id, lat, lng, found, dateFound, timeSpent }
+  let markersMap = new Map(); // cacheId -> L.Marker
+
+  // Game Tracking State
+  let isGameRunning = false;
+  let watchId = null;
+  let userPath = []; // Array of [lat, lng]
+  let pathPolyline = null;
+  let userMarker = null;
+  let startTime = null;
+  let timerInterval = null;
+  let totalDistanceMeters = 0;
+
+  // Config
+  const PROXIMITY_RADIUS_METERS = 20; // 20 meters threshold for cache discovery
+
+  // --- INITIALIZATION ---
+  window.onload = function() {
+    initMap();
+    loadCachesFromStorage();
+    loadLogsFromStorage();
+    updateUI();
+  };
+
+  function initMap() {
+    // Default initial view: Hungary center (Budapest region)
+    map = L.map('map', {
+      zoomControl: false
+    }).setView([47.4979, 19.0402], 12);
+
+    // Re-add zoom control to bottom right for mobile friendliness
+    L.control.zoom({ position: 'topright' }).addTo(map);
+
+    // OpenStreetMap Tile Layer
+    tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    // Apply initial Vak Térkép filter styling
+    applyBlankMapStyle();
+
+    // Click on map to place new Geo láda marker
+    map.on('click', function(e) {
+      if (isGameRunning) return; // Disable adding caches during active game search
+      addCache(e.latlng.lat, e.latlng.lng);
+    });
+  }
+
+  // --- MAP STYLING & TOGGLE ---
+  function applyBlankMapStyle() {
+    const tileContainer = tileLayer.getContainer();
+    if (!tileContainer) return;
+
+    if (isBlankMap) {
+      tileContainer.classList.add('blank-map-layer');
+    } else {
+      tileContainer.classList.remove('blank-map-layer');
+    }
+  }
+
+  function toggleMapVisibility() {
+    isBlankMap = !isBlankMap;
+    applyBlankMapStyle();
+
+    const btnText = document.getElementById('toggleMapText');
+    const btnIcon = document.getElementById('toggleMapIcon');
+
+    if (isBlankMap) {
+      btnText.textContent = 'Térkép bekapcsolása';
+      btnIcon.className = 'fa-solid fa-eye-slash';
+      showStatus('Vak térkép mód: A domborzati részletek rejtve vannak.');
+    } else {
+      btnText.textContent = 'Vak térkép bekapcsolása';
+      btnIcon.className = 'fa-solid fa-eye';
+      showStatus('Valós térkép mód bekapcsolva.');
+    }
+  }
+
+  // --- LOCATION SEARCH (Nominatim API) ---
+  async function searchLocation() {
+    const query = document.getElementById('searchInput').value.trim();
+    if (!query) return;
+
+    showStatus('Keresés folyamatban...');
+
+    try {
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&countrycodes=hu`);
+      const data = await response.json();
+
+      if (data && data.length > 0) {
+        const firstResult = data[0];
+        const lat = parseFloat(firstResult.lat);
+        const lon = parseFloat(firstResult.lon);
+        map.flyTo([lat, lon], 14, { duration: 1.5 });
+        showStatus(`Megnyitva: ${firstResult.display_name.split(',')[0]}`);
+      } else {
+        showStatus('Sajnos nem található a település!');
+      }
+    } catch (err) {
+      console.error('Keresési hiba:', err);
+      showStatus('Hiba történt a keresés során.');
+    }
+  }
+
+  // --- CACHE MARKER MANAGMENT ---
+  function addCache(lat, lng) {
+    const newId = caches.length > 0 ? Math.max(...caches.map(c => c.id)) + 1 : 1;
+    const cacheObj = {
+      id: newId,
+      lat: lat,
+      lng: lng,
+      found: false,
+      dateFound: null,
+      timeSpent: null
+    };
+
+    caches.push(cacheObj);
+    renderCacheMarker(cacheObj);
+    saveCachesToStorage();
+    updateUI();
+
+    showStatus(`Geo láda #${newId} elhelyezve!`);
+  }
+
+  function renderCacheMarker(cacheObj) {
+    // Create custom SVG Icon for Geocache box
+    const isFound = cacheObj.found;
+    const iconHtml = `
+        <div class="relative flex items-center justify-center w-8 h-8 rounded-full border-2 ${isFound ? 'bg-emerald-500 border-white text-white' : 'bg-amber-500 border-slate-900 text-slate-900'} shadow-lg transform hover:scale-110 transition">
+          <i class="fa-solid ${isFound ? 'fa-check' : 'fa-box'} text-sm"></i>
+          <span class="absolute -top-2 -right-2 bg-slate-900 text-white border border-slate-600 rounded-full w-4 h-4 text-[10px] flex items-center justify-center font-bold">${cacheObj.id}</span>
+        </div>
+      `;
+
+    const customIcon = L.divIcon({
+      html: iconHtml,
+      className: 'custom-cache-icon',
+      iconSize: [32, 32],
+      iconAnchor: [16, 16]
+    });
+
+    const marker = L.marker([cacheObj.lat, cacheObj.lng], { icon: customIcon }).addTo(map);
+
+    // Marker click popup
+    marker.bindPopup(`
+        <div class="text-slate-900 text-sm font-sans p-1">
+          <strong class="text-amber-600 text-base">Geo láda #${cacheObj.id}</strong><br>
+          <span class="text-xs text-slate-600">Státusz: ${cacheObj.found ? '<strong class="text-emerald-600">Megtalálva</strong>' : 'Keresés alatt'}</span>
+          ${!isGameRunning ? `
+            <div class="mt-2 pt-2 border-t border-slate-200">
+              <button onclick="deleteSingleCache(${cacheObj.id})" class="text-xs text-red-600 hover:text-red-800 font-semibold flex items-center gap-1">
+                <i class="fa-solid fa-trash"></i> Láda törlése
+              </button>
+            </div>
+          ` : ''}
+        </div>
+      `);
+
+    markersMap.set(cacheObj.id, marker);
+  }
+
+  function deleteSingleCache(id) {
+    caches = caches.filter(c => c.id !== id);
+    if (markersMap.has(id)) {
+      map.removeLayer(markersMap.get(id));
+      markersMap.delete(id);
+    }
+    saveCachesToStorage();
+    updateUI();
+    showStatus(`Geo láda #${id} törölve.`);
+  }
+
+  function clearCaches() {
+    if (isGameRunning) return;
+    if (caches.length === 0) return;
+
+    if (confirm('Biztosan törölni szeretnéd az összes elhelyezett ládát?')) {
+      caches.forEach(c => {
+        if (markersMap.has(c.id)) {
+          map.removeLayer(markersMap.get(c.id));
+        }
+      });
+      caches = [];
+      markersMap.clear();
+      saveCachesToStorage();
+      updateUI();
+      showStatus('Összes geo láda törölve.');
+    }
+  }
+
+  // --- GAMEPLAY MECHANICS & GPS TRACKING ---
+  function startGame() {
+    if (caches.length === 0) {
+      alert('Kérlek helyezz el legalább egy geo ládát a térképen az indítás előtt!');
+      return;
+    }
+
+    if (!navigator.geolocation) {
+      alert('A böngésződ nem támogatja a Geolocation (GPS) funkciót!');
+      return;
+    }
+
+    isGameRunning = true;
+    userPath = [];
+    totalDistanceMeters = 0;
+    startTime = new Date();
+
+    // UI updates
+    document.getElementById('startGameBtn').classList.add('hidden');
+    document.getElementById('stopGameBtn').classList.remove('hidden');
+    document.getElementById('gameTimer').classList.remove('hidden');
+    showStatus('Keresés elindítva! Kövesd a vonalat a ládákhoz.');
+
+    // Start Timer
+    startTimer();
+
+    // Start Tracking Route
+    pathPolyline = L.polyline([], {
+      color: '#3b82f6',
+      weight: 5,
+      opacity: 0.9,
+      lineCap: 'round',
+      lineJoin: 'round'
+    }).addTo(map);
+
+    // Start HTML5 GPS Watcher
+    watchId = navigator.geolocation.watchPosition(
+      onLocationUpdate,
+      onLocationError,
+      {
+        enableHighAccuracy: true,
+        maximumAge: 2000,
+        timeout: 10000
+      }
+    );
+  }
+
+  function stopGame() {
+    if (!isGameRunning) return;
+
+    isGameRunning = false;
+    if (watchId !== null) {
+      navigator.geolocation.clearWatch(watchId);
+      watchId = null;
+    }
+
+    clearInterval(timerInterval);
+
+    // UI restore
+    document.getElementById('startGameBtn').classList.remove('hidden');
+    document.getElementById('stopGameBtn').classList.add('hidden');
+    document.getElementById('gameTimer').classList.add('hidden');
+
+    showStatus('Keresés leállítva.');
+  }
+
+  function onLocationUpdate(position) {
+    const lat = position.coords.latitude;
+    const lng = position.coords.longitude;
+    const newLatLng = [lat, lng];
+
+    // Calculate path distance
+    if (userPath.length > 0) {
+      const lastPoint = userPath[userPath.length - 1];
+      const dist = map.distance(lastPoint, newLatLng);
+      totalDistanceMeters += dist;
+      document.getElementById('distanceText').textContent = Math.round(totalDistanceMeters) + ' m';
+    }
+
+    userPath.push(newLatLng);
+
+    // Update User Marker
+    if (!userMarker) {
+      const userIcon = L.divIcon({
+        html: '<div class="user-pulse"></div>',
+        className: 'user-marker-icon',
+        iconSize: [16, 16],
+        iconAnchor: [8, 8]
+      });
+      userMarker = L.marker(newLatLng, { icon: userIcon }).addTo(map);
+      map.panTo(newLatLng);
+    } else {
+      userMarker.setLatLng(newLatLng);
+    }
+
+    // Update Polyline
+    if (pathPolyline) {
+      pathPolyline.setLatLngs(userPath);
+    }
+
+    // Check Proximity to Caches
+    checkCacheProximity(lat, lng);
+  }
+
+  function onLocationError(err) {
+    console.warn('GPS position warning:', err);
+    showStatus('GPS jel keresése... Helymeghatározás sikertelen.');
+  }
+
+  function checkCacheProximity(userLat, userLng) {
+    caches.forEach(cache => {
+      if (!cache.found) {
+        const cacheLatLng = L.latLng(cache.lat, cache.lng);
+        const userLatLng = L.latLng(userLat, userLng);
+        const distance = map.distance(cacheLatLng, userLatLng);
+
+        // Trigger target found if within radius
+        if (distance <= PROXIMITY_RADIUS_METERS) {
+          markCacheAsFound(cache);
+        }
+      }
+    });
+  }
+
+  function markCacheAsFound(cache) {
+    cache.found = true;
+    const elapsedFormatted = getFormattedElapsedTime();
+    const dateStr = new Date().toLocaleString('hu-HU');
+
+    cache.dateFound = dateStr;
+    cache.timeSpent = elapsedFormatted;
+
+    // Update Marker View
+    if (markersMap.has(cache.id)) {
+      map.removeLayer(markersMap.get(cache.id));
+      markersMap.delete(cache.id);
+    }
+    renderCacheMarker(cache);
+
+    // Save States
+    saveCachesToStorage();
+    saveLogToStorage({
+      id: cache.id,
+      time: elapsedFormatted,
+      date: dateStr,
+      distance: Math.round(totalDistanceMeters)
+    });
+    updateUI();
+
+    // Show Victory Modal
+    showVictoryModal(cache.id, elapsedFormatted, dateStr);
+  }
+
+  // --- TIMERS & UTILS ---
+  function startTimer() {
+    updateTimerDisplay();
+    timerInterval = setInterval(updateTimerDisplay, 1000);
+  }
+
+  function getFormattedElapsedTime() {
+    if (!startTime) return "00:00:00";
+    const now = new Date();
+    const diffMs = now - startTime;
+    const totalSec = Math.floor(diffMs / 1000);
+    const hours = Math.floor(totalSec / 3600);
+    const minutes = Math.floor((totalSec % 3600) / 60);
+    const seconds = totalSec % 60;
+
+    return [hours, minutes, seconds]
+      .map(v => v < 10 ? '0' + v : v)
+      .join(':');
+  }
+
+  function updateTimerDisplay() {
+    document.getElementById('gameTimer').textContent = getFormattedElapsedTime();
+  }
+
+  function showStatus(message) {
+    document.getElementById('statusText').textContent = message;
+  }
+
+  function updateUI() {
+    const foundCount = caches.filter(c => c.found).length;
+    document.getElementById('cacheCountText').textContent = caches.length;
+    document.getElementById('foundCountText').textContent = foundCount;
+  }
+
+  // --- MODALS & STORAGE ---
+  function showVictoryModal(id, timeStr, dateStr) {
+    document.getElementById('victoryCacheId').textContent = '#' + id;
+    document.getElementById('victoryTime').textContent = timeStr;
+    document.getElementById('victoryDate').textContent = dateStr;
+    document.getElementById('victoryModal').classList.remove('hidden');
+  }
+
+  function closeVictoryModal() {
+    document.getElementById('victoryModal').classList.add('hidden');
+  }
+
+  function toggleLogModal() {
+    const modal = document.getElementById('logModal');
+    modal.classList.toggle('hidden');
+    if (!modal.classList.contains('hidden')) {
+      renderLogs();
+    }
+  }
+
+  // Local Storage - Caches
+  function saveCachesToStorage() {
+    localStorage.setItem('geolada_caches', JSON.stringify(caches));
+  }
+
+  function loadCachesFromStorage() {
+    const stored = localStorage.getItem('geolada_caches');
+    if (stored) {
+      try {
+        caches = JSON.parse(stored);
+        caches.forEach(c => renderCacheMarker(c));
+      } catch (e) {
+        console.error('Hiba a ládák betöltésekor:', e);
+        caches = [];
+      }
+    }
+  }
+
+  // Local Storage - Logs
+  function getLogsFromStorage() {
+    const stored = localStorage.getItem('geolada_logs');
+    return stored ? JSON.parse(stored) : [];
+  }
+
+  function saveLogToStorage(logEntry) {
+    const logs = getLogsFromStorage();
+    logs.unshift(logEntry); // new first
+    localStorage.setItem('geolada_logs', JSON.stringify(logs));
+  }
+
+  function renderLogs() {
+    const logs = getLogsFromStorage();
+    const container = document.getElementById('logList');
+
+    if (logs.length === 0) {
+      container.innerHTML = `<p class="text-slate-400 text-center py-4">Még nem találtál meg egyetlen ládát sem.</p>`;
+      return;
+    }
+
+    container.innerHTML = logs.map(log => `
+        <div class="bg-slate-900 border border-slate-700/70 rounded-xl p-3 flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center font-bold text-xs">
+              #${log.id}
+            </div>
+            <div>
+              <div class="font-semibold text-slate-200">Geo láda #${log.id}</div>
+              <div class="text-[11px] text-slate-400">${log.date}</div>
+            </div>
+          </div>
+          <div class="text-right">
+            <div class="font-mono font-bold text-emerald-400 text-xs"><i class="fa-regular fa-clock"></i> ${log.time}</div>
+            <div class="text-[11px] text-slate-400">${log.distance ? log.distance + ' m megtéve' : ''}</div>
+          </div>
+        </div>
+      `).join('');
+  }
+
+  function clearLogs() {
+    if (confirm('Biztosan törölni szeretnéd a megtalálási előzményeket?')) {
+      localStorage.removeItem('geolada_logs');
+      renderLogs();
+    }
+  }
+</script>
+</body>
+</html>
